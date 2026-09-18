@@ -14,6 +14,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Axiom Lite</title>
+<!-- GUST-style proxy engine (libcurl.js + WISP, no service workers) -->
 <script src="https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
@@ -1166,7 +1167,7 @@ body {
   </nav>
   <main>
     <section class="hero"><h1>cloud gaming</h1><p class="tagline">real android apps, streamed — not a proxy, an actual cloud instance</p></section>
-    <section class="games-grid" id="cloudGrid"><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/roadblock.png&quot;);"></span><span class="info"><span class="name">Roblox</span><span class="cat">adventure</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/stumbleguys.jpg&quot;);"></span><span class="info"><span class="name">Stumble Guys</span><span class="cat">arcade</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/cod.jpg&quot;);"></span><span class="info"><span class="name">Call of Duty</span><span class="cat">action</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/melon-sandbox.png&quot;);"></span><span class="info"><span class="name">Melon Sandbox</span><span class="cat">sandbox</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/cookierun.jpg&quot;);"></span><span class="info"><span class="name">Cookie Run</span><span class="cat">arcade</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/geodash.png&quot;);"></span><span class="info"><span class="name">Geometry Dash</span><span class="cat">arcade</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/rocketleague.webp&quot;);"></span><span class="info"><span class="name">Rocket League</span><span class="cat">sports</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/fortnite.png&quot;);"></span><span class="info"><span class="name">Fortnite</span><span class="cat">action</span></span></a><a class="game-card" href="javascript:void(0)"><span class="cover" style="background-image: url(&quot;https://nowgg.fun/img/minecraft.png&quot;);"></span><span class="info"><span class="name">Minecraft</span><span class="cat">sandbox</span></span></a></section>
+    <section class="games-grid" id="cloudGrid"></section>
   </main>
 </div>
 
@@ -1313,7 +1314,7 @@ body {
     <div class="game-loader" id="gameLoader">
       <div class="spinner"></div>
       <div class="gl-title" id="glTitle">loading…</div>
-      <div class="gl-hint" id="glHint">booting the proxy and the game</div>
+      <div class="gl-hint" id="glHint">booting GUST proxy and the game</div>
       <button id="glDismiss" type="button" hidden="">still loading — show anyway</button>
     </div>
   </div>
@@ -4654,7 +4655,22 @@ const CLOUD_APPS = [
   { title: "Minecraft", category: "sandbox", thumbnail: "https://nowgg.fun/img/minecraft.png", url: "https://nowgg.fun/apps/aptoide/5874/aptoide.html?deep_link=aptoidesearch://com.mojang.minecrafttrialpe" },
 ];
 const cloudGrid = document.getElementById("cloudGrid");
-CLOUD_APPS.forEach(app => cloudGrid.appendChild(buildCard(app, item => launchGame(item.url, item.title))));
+if (cloudGrid) {
+  cloudGrid.innerHTML = "";
+  CLOUD_APPS.forEach(app => cloudGrid.appendChild(buildCard(app, item => launchCloudApp(item))));
+}
+
+async function launchCloudApp(item) {
+  const url = item.url;
+  const title = item.title || "Cloud app";
+  // Prefer GUST proxy (now.gg needs it); fall back to new tab if proxy dies
+  try {
+    await launchGame(url, title);
+  } catch (e) {
+    console.warn("[cloud] launch failed, opening new tab", e);
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
 
 const moviesGrid = document.getElementById("moviesGrid");
 const moviesStatus = document.getElementById("moviesStatus");
@@ -4685,7 +4701,13 @@ fetch("https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_KEY + "&page=
 
 
 let proxyReady = false;
-const WISP = "wss://anura.pro/wisp/";
+const WISP_SERVERS = [
+  "wss://anura.pro/wisp/",
+  "wss://wisp.mercurywork.shop/",
+  "wss://wisp.spacegulls.com/",
+  "wss://nebulaproxy.io/wisp/"
+];
+let WISP = WISP_SERVERS[0];
 
 
 
@@ -4711,9 +4733,32 @@ async function lcInit(statusEl) {
       libcurl.onload = () => { clearTimeout(timeout); resolve(); };
       libcurl.load_wasm("https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.wasm");
     });
-    libcurl.set_websocket(WISP);
+    let lastErr = null;
+    for (const server of WISP_SERVERS) {
+      try {
+        if (statusEl) statusEl.textContent = "GUST connecting " + server + "…";
+        libcurl.set_websocket(server);
+        WISP = server;
+        // quick probe
+        await Promise.race([
+          libcurl.fetch("https://www.google.com/generate_204", { method: "GET" }).catch(() => null),
+          new Promise(r => setTimeout(r, 2500))
+        ]);
+        proxyReady = true;
+        if (statusEl) statusEl.textContent = "GUST ready";
+        console.log("[Axiom Lite] WISP ok:", server);
+        return;
+      } catch (e) {
+        lastErr = e;
+        console.warn("[Axiom Lite] WISP failed:", server, e);
+      }
+    }
+    // still mark ready with first server — browse may work even if probe fails
+    libcurl.set_websocket(WISP_SERVERS[0]);
+    WISP = WISP_SERVERS[0];
     proxyReady = true;
-    if (statusEl) statusEl.textContent = "";
+    if (statusEl) statusEl.textContent = "GUST ready (fallback)";
+    if (lastErr) console.warn("[Axiom Lite] all WISP probes failed, using fallback", lastErr);
   })();
   lcReadyPromise.catch(err => { if (statusEl) statusEl.textContent = "proxy init failed: " + err.message; });
   return lcReadyPromise;
@@ -5007,6 +5052,18 @@ async function lcRewriteAndLoad(iframeEl, url, onStatus) {
   onStatus && onStatus("loaded " + finalUrl);
   return finalUrl;
 }
+async function lcSwitchWisp(next) {
+  try {
+    libcurl.set_websocket(next);
+    WISP = next;
+    console.log("[Axiom Lite] switched WISP to", next);
+    return true;
+  } catch (e) {
+    console.warn("[Axiom Lite] switch WISP failed", next, e);
+    return false;
+  }
+}
+
 async function lcNavigate(iframeEl, url, onStatus, onNavigated) {
   await lcInit();
   if (onNavigated) iframeEl.__libcurlOnNavigated = onNavigated;
@@ -5041,13 +5098,26 @@ function resolveUrl(input) {
   return "https://duckduckgo.com/?q=" + encodeURIComponent(t);
 }
 function browserNavigate(url) {
-  document.getElementById("browserStart").classList.add("hidden");
-  document.getElementById("browserFrameWrap").classList.remove("hidden");
-  urlBar.value = url;
+  const start = document.getElementById("browserStart");
+  const wrap = document.getElementById("browserFrameWrap");
+  const status = document.getElementById("proxyStatus");
+  if (start) start.classList.add("hidden");
+  if (wrap) wrap.classList.remove("hidden");
+  if (urlBar) urlBar.value = url;
+  if (status) status.textContent = "GUST: starting…";
   const isLocal = url.startsWith(location.origin + "/") || url.startsWith("/");
-  if (isLocal) { proxyFrame.removeAttribute("srcdoc"); proxyFrame.src = url; return; }
-  lcNavigate(proxyFrame, url, msg => { document.getElementById("proxyStatus").textContent = msg; })
-    .catch(err => { document.getElementById("proxyStatus").textContent = "failed: " + err.message; });
+  if (isLocal) {
+    proxyFrame.removeAttribute("srcdoc");
+    proxyFrame.src = url;
+    if (status) status.textContent = "";
+    return;
+  }
+  lcNavigate(proxyFrame, url, msg => { if (status) status.textContent = "GUST: " + msg; })
+    .then(() => { if (status) status.textContent = "GUST: loaded"; })
+    .catch(err => {
+      if (status) status.textContent = "GUST failed: " + ((err && err.message) || err) + " — try again or another site";
+      console.error("[browserNavigate]", err);
+    });
 }
 (document.getElementById("goBtn")||{addEventListener:()=>{}}).addEventListener("click", () => { const u = resolveUrl(urlBar.value); if (u) browserNavigate(u); });
 (urlBar||{addEventListener:()=>{}}).addEventListener("keydown", e => { if (e.key === "Enter") { const u = resolveUrl(urlBar.value); if (u) browserNavigate(u); } });
@@ -5083,24 +5153,95 @@ document.getElementById("playerBack").addEventListener("click", closePlayer);
 document.getElementById("playerClose").addEventListener("click", closePlayer);
 
 async function launchGame(url, title) {
+  if (!url) return;
+  url = String(url).trim();
+  title = title || "game";
+
   gamePlayer.classList.add("open");
   document.body.classList.add("player-open");
   document.documentElement.classList.add("player-open");
   document.getElementById("gameTitle").textContent = title;
   document.getElementById("glTitle").textContent = title;
+  document.getElementById("glHint").textContent = "preparing…";
   loaderHidden = false;
   gameLoader.classList.remove("gone");
   glDismiss.hidden = true;
+  clearTimeout(loaderTimer); clearTimeout(dismissTimer);
   loaderTimer = setTimeout(hideLoader, 45000);
   dismissTimer = setTimeout(() => { if (!loaderHidden) glDismiss.hidden = false; }, 8000);
 
+  gameFrame.removeAttribute("srcdoc");
+  gameFrame.src = "about:blank";
+
   const isLocal = url.startsWith(location.origin + "/") || url.startsWith("/");
-  if (isLocal) { gameFrame.removeAttribute("srcdoc"); gameFrame.src = url; return; }
+  // Direct-load trusted game CDNs (Axiom / GN Math / jsDelivr / github pages) — same idea as main Axiom
+  let canDirect = isLocal;
   try {
-    await lcNavigate(gameFrame, url, msg => { document.getElementById("glHint").textContent = msg; });
-    setTimeout(hideLoader, 250);
+    const h = new URL(url, location.href).hostname;
+    canDirect = canDirect || /(^|\.)(jsdelivr\.net|github\.io|githubusercontent\.com|pages\.dev|netlify\.app|vercel\.app|raw\.githack\.com|gitcdn\.link)$/i.test(h);
+  } catch (_) {}
+
+  function loadDirect() {
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const t = setTimeout(() => {
+        if (done) return;
+        done = true;
+        reject(new Error("direct load timed out"));
+      }, 10000);
+      gameFrame.onload = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve();
+      };
+      gameFrame.onerror = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        reject(new Error("direct load failed"));
+      };
+      document.getElementById("glHint").textContent = "loading game…";
+      gameFrame.src = url;
+    });
+  }
+
+  async function loadViaGust() {
+    document.getElementById("glHint").textContent = "booting GUST proxy…";
+    let last = null;
+    const servers = (typeof WISP_SERVERS !== "undefined" && WISP_SERVERS.length) ? WISP_SERVERS : [WISP];
+    for (const server of servers) {
+      try {
+        document.getElementById("glHint").textContent = "GUST via " + server + "…";
+        if (typeof lcSwitchWisp === "function") await lcSwitchWisp(server);
+        await lcNavigate(gameFrame, url, msg => {
+          document.getElementById("glHint").textContent = "GUST: " + msg;
+        });
+        return;
+      } catch (e) {
+        last = e;
+        console.warn("[GUST] failed on", server, e);
+      }
+    }
+    throw last || new Error("all GUST servers failed");
+  }
+
+  try {
+    if (canDirect) {
+      try {
+        await loadDirect();
+        setTimeout(hideLoader, 300);
+        return;
+      } catch (directErr) {
+        document.getElementById("glHint").textContent = "direct failed — switching to GUST…";
+        console.warn("[Axiom Lite] direct load failed, using GUST", directErr);
+      }
+    }
+    await loadViaGust();
+    setTimeout(hideLoader, 300);
   } catch (err) {
-    document.getElementById("glHint").textContent = "failed: " + err.message;
+    document.getElementById("glHint").textContent = "failed: " + ((err && err.message) || err);
+    console.error("[Axiom Lite] launchGame", err);
   }
 }
 
