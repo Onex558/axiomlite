@@ -1,3 +1,4 @@
+
 <html lang="en" data-theme="dark"><head>
 
 <!-- Google Analytics 4 -->
@@ -14,7 +15,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Axiom Lite</title>
-<!-- GUST-style proxy engine (libcurl.js + WISP, no service workers) -->
+<!-- proxy engine -->
 <script src="https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
@@ -1314,7 +1315,7 @@ body {
     <div class="game-loader" id="gameLoader">
       <div class="spinner"></div>
       <div class="gl-title" id="glTitle">loading…</div>
-      <div class="gl-hint" id="glHint">booting GUST proxy and the game</div>
+      <div class="gl-hint" id="glHint">loading…</div>
       <button id="glDismiss" type="button" hidden="">still loading — show anyway</button>
     </div>
   </div>
@@ -4663,7 +4664,7 @@ if (cloudGrid) {
 async function launchCloudApp(item) {
   const url = item.url;
   const title = item.title || "Cloud app";
-  // Prefer GUST proxy (now.gg needs it); fall back to new tab if proxy dies
+  // Prefer embedded proxy; fall back to new tab if it fails
   try {
     await launchGame(url, title);
   } catch (e) {
@@ -4700,12 +4701,82 @@ fetch("https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_KEY + "&page=
 
 
 
+
+/* Proxy opens inside Axiom player only — no third-party browser UI */
+function openProxyBrowser(targetUrl) {
+  const url = targetUrl || "https://duckduckgo.com";
+  const player = document.getElementById("gamePlayer");
+  const frame = document.getElementById("gameFrame");
+  const titleEl = document.getElementById("gameTitle");
+  const loader = document.getElementById("gameLoader");
+  if (!player || !frame) return;
+  player.classList.add("open");
+  document.body.classList.add("player-open");
+  document.documentElement.classList.add("player-open");
+  if (titleEl) titleEl.textContent = url;
+  if (loader) {
+    loader.classList.remove("gone");
+    const hint = document.getElementById("glHint");
+    const glTitle = document.getElementById("glTitle");
+    if (glTitle) glTitle.textContent = url;
+    if (hint) hint.textContent = "loading…";
+  }
+  frame.removeAttribute("srcdoc");
+  frame.src = "about:blank";
+  const status = (msg) => {
+    const hint = document.getElementById("glHint");
+    if (hint) hint.textContent = msg || "";
+  };
+  // Use built-in libcurl proxy path (Axiom chrome only)
+  if (typeof lcNavigate === "function") {
+    lcNavigate(frame, url, status)
+      .then(() => { if (loader) loader.classList.add("gone"); })
+      .catch(err => {
+        status("failed — trying fallback…");
+        // CORS fallback
+        (async () => {
+          try {
+            const proxies = [
+              "https://corsproxy.io/?" + encodeURIComponent(url),
+              "https://api.allorigins.win/raw?url=" + encodeURIComponent(url)
+            ];
+            let html = null;
+            for (const p of proxies) {
+              try {
+                const r = await fetch(p);
+                if (r.ok) { html = await r.text(); break; }
+              } catch (_) {}
+            }
+            if (!html) throw new Error((err && err.message) || "load failed");
+            const base = url.replace(/[^/]+$/, "");
+            if (!/<base\s/i.test(html)) {
+              if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => m + '<base href="' + base + '">');
+              else html = '<!DOCTYPE html><head><base href="' + base + '"></head>' + html;
+            }
+            frame.removeAttribute("src");
+            frame.srcdoc = html;
+            if (loader) loader.classList.add("gone");
+          } catch (e2) {
+            status("failed: " + ((e2 && e2.message) || e2));
+            try { window.open(url, "_blank", "noopener,noreferrer"); } catch(_){}
+          }
+        })();
+      });
+  } else {
+    frame.src = url;
+    setTimeout(() => { if (loader) loader.classList.add("gone"); }, 2000);
+  }
+}
+function getProxyBlobUrl() { return "about:blank"; }
+
 let proxyReady = false;
 const WISP_SERVERS = [
-  "wss://anura.pro/wisp/",
   "wss://wisp.mercurywork.shop/",
+  "wss://anura.pro/wisp/",
   "wss://wisp.spacegulls.com/",
-  "wss://nebulaproxy.io/wisp/"
+  "wss://nebulaproxy.io/wisp/",
+  "wss://wisp.reallygoodtester.com/wisp/",
+  "wss://wisp.terbium.app/wisp/"
 ];
 let WISP = WISP_SERVERS[0];
 
@@ -4728,39 +4799,59 @@ async function lcInit(statusEl) {
   if (lcReadyPromise) return lcReadyPromise;
   lcReadyPromise = (async () => {
     await lcWaitForGlobal();
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("libcurl.js init timed out")), 20000);
-      libcurl.onload = () => { clearTimeout(timeout); resolve(); };
-      libcurl.load_wasm("https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.wasm");
-    });
+    // libcurl.js 0.7+ returns a Promise from load_wasm — do NOT rely on onload
+    if (statusEl) statusEl.textContent = "loading…";
+    try {
+      await Promise.race([
+        libcurl.load_wasm("https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.wasm"),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("libcurl.wasm timed out")), 25000))
+      ]);
+    } catch (wasmErr) {
+      // some builds fire onload instead
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(wasmErr || new Error("libcurl.js init timed out")), 15000);
+        try {
+          libcurl.onload = () => { clearTimeout(timeout); resolve(); };
+          libcurl.load_wasm("https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.wasm");
+        } catch (e) {
+          clearTimeout(timeout);
+          reject(e);
+        }
+      });
+    }
     let lastErr = null;
     for (const server of WISP_SERVERS) {
       try {
-        if (statusEl) statusEl.textContent = "GUST connecting " + server + "…";
+        if (statusEl) statusEl.textContent = "connecting " + server + "…";
         libcurl.set_websocket(server);
         WISP = server;
-        // quick probe
+        // real probe with timeout
+        const probe = libcurl.fetch("https://www.google.com/generate_204", { method: "GET" });
         await Promise.race([
-          libcurl.fetch("https://www.google.com/generate_204", { method: "GET" }).catch(() => null),
-          new Promise(r => setTimeout(r, 2500))
+          probe,
+          new Promise((_, rej) => setTimeout(() => rej(new Error("probe timeout")), 4000))
         ]);
         proxyReady = true;
-        if (statusEl) statusEl.textContent = "GUST ready";
+        if (statusEl) statusEl.textContent = "ready";
         console.log("[Axiom Lite] WISP ok:", server);
         return;
       } catch (e) {
         lastErr = e;
-        console.warn("[Axiom Lite] WISP failed:", server, e);
+        console.warn("[Axiom Lite] WISP failed:", server, e && (e.message || e));
       }
     }
-    // still mark ready with first server — browse may work even if probe fails
     libcurl.set_websocket(WISP_SERVERS[0]);
     WISP = WISP_SERVERS[0];
     proxyReady = true;
-    if (statusEl) statusEl.textContent = "GUST ready (fallback)";
-    if (lastErr) console.warn("[Axiom Lite] all WISP probes failed, using fallback", lastErr);
+    if (statusEl) statusEl.textContent = "ready (best effort)";
+    if (lastErr) console.warn("[Axiom Lite] probes failed, using first WISP", lastErr);
   })();
-  lcReadyPromise.catch(err => { if (statusEl) statusEl.textContent = "proxy init failed: " + err.message; });
+  lcReadyPromise = lcReadyPromise.catch(err => {
+    lcReadyPromise = null; // allow retry
+    proxyReady = false;
+    if (statusEl) statusEl.textContent = "proxy init failed: " + err.message;
+    throw err;
+  });
   return lcReadyPromise;
 }
 
@@ -4840,8 +4931,55 @@ async function lcCookieRelayFetch(url, params = {}) {
     arrayBuffer: async () => bytes.buffer,
   };
 }
-function lcDoFetch(url, params) {
-  return lcNeedsCookieRelay(url) ? lcCookieRelayFetch(url, params) : libcurl.fetch(url, params);
+async function lcDoFetch(url, params) {
+  if (lcNeedsCookieRelay(url)) {
+    try { return await lcCookieRelayFetch(url, params); } catch (e) {
+      console.warn("[lcDoFetch] cookie relay failed, trying libcurl", e);
+    }
+  }
+  await lcInit();
+  let lastErr = null;
+  const servers = (typeof WISP_SERVERS !== "undefined" && WISP_SERVERS.length) ? WISP_SERVERS : [WISP];
+  // try current WISP first, then others
+  const ordered = [WISP, ...servers.filter(s => s !== WISP)];
+  for (const server of ordered) {
+    try {
+      if (server !== WISP) {
+        try { libcurl.set_websocket(server); WISP = server; } catch (_) {}
+      }
+      const res = await libcurl.fetch(url, params || {});
+      return res;
+    } catch (e) {
+      lastErr = e;
+      console.warn("[lcDoFetch] fail on", server, e && (e.message || e));
+    }
+  }
+  // last resort: public CORS proxies (GET only, limited sites)
+  const method = ((params && params.method) || "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD") {
+    const proxies = [
+      "https://corsproxy.io/?" + encodeURIComponent(url),
+      "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
+      "https://cors.eu.org/" + url
+    ];
+    for (const p of proxies) {
+      try {
+        const r = await fetch(p, { method: "GET" });
+        if (!r.ok) continue;
+        const buf = await r.arrayBuffer();
+        const ct = r.headers.get("content-type") || "text/html";
+        return {
+          url: url,
+          status: r.status,
+          ok: r.ok,
+          headers: { get: (name) => (name.toLowerCase() === "content-type" ? ct : null) },
+          text: async () => new TextDecoder().decode(buf),
+          arrayBuffer: async () => buf
+        };
+      } catch (_) {}
+    }
+  }
+  throw lastErr || new Error("all fetch paths failed for " + url);
 }
 async function lcHandleRuntimeFetch(iframeEl, req) {
   let payload;
@@ -5030,14 +5168,28 @@ async function lcRewriteAndLoad(iframeEl, url, onStatus) {
     }
   });
   const assets = [];
-  doc.querySelectorAll("link[rel=stylesheet][href], script[src], img[src]").forEach(el => {
-    const attr = el.tagName === "LINK" ? "href" : "src";
+  doc.querySelectorAll("link[href], script[src], img[src], source[src], video[src], audio[src], iframe[src]").forEach(el => {
+    const attr = el.hasAttribute("href") ? "href" : "src";
     const raw = el.getAttribute(attr);
-    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return;
+    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("javascript:")) return;
     let abs;
     try { abs = new URL(raw, finalUrl).href; } catch { return; }
     const isScript = el.tagName === "SCRIPT" && lcShouldRewriteScript(el);
     assets.push({ el, attr, abs, isScript });
+  });
+  // also srcset on images
+  doc.querySelectorAll("img[srcset], source[srcset]").forEach(el => {
+    const raw = el.getAttribute("srcset");
+    if (!raw) return;
+    const parts = raw.split(",").map(s => s.trim()).map(part => {
+      const bits = part.split(/\s+/);
+      const u = bits[0];
+      if (!u || u.startsWith("data:") || u.startsWith("blob:")) return part;
+      try { bits[0] = new URL(u, finalUrl).href; } catch(_){}
+      return bits.join(" ");
+    });
+    // leave srcset as absolute http URLs — browser may still fail CORS; best-effort
+    el.setAttribute("srcset", parts.join(", "));
   });
   onStatus && onStatus("loading " + assets.length + " sub-resources");
   await Promise.all(assets.map(async a => {
@@ -5067,9 +5219,9 @@ async function lcSwitchWisp(next) {
 async function lcNavigate(iframeEl, url, onStatus, onNavigated) {
   await lcInit();
   if (onNavigated) iframeEl.__libcurlOnNavigated = onNavigated;
-  if (!iframeEl.hasAttribute("sandbox")) {
-    iframeEl.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin allow-popups");
-  }
+  // permissive sandbox so sites can run scripts, forms, media, popups
+  iframeEl.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation");
+  try { iframeEl.setAttribute("allow", "fullscreen *; autoplay *; clipboard-read *; clipboard-write *"); } catch(_){}
   if (!iframeEl.__libcurlNavHandler) {
     iframeEl.__libcurlNavHandler = (e) => {
       if (e.source !== iframeEl.contentWindow) return;
@@ -5103,21 +5255,11 @@ function browserNavigate(url) {
   const status = document.getElementById("proxyStatus");
   if (start) start.classList.add("hidden");
   if (wrap) wrap.classList.remove("hidden");
-  if (urlBar) urlBar.value = url;
-  if (status) status.textContent = "GUST: starting…";
-  const isLocal = url.startsWith(location.origin + "/") || url.startsWith("/");
-  if (isLocal) {
-    proxyFrame.removeAttribute("srcdoc");
-    proxyFrame.src = url;
-    if (status) status.textContent = "";
-    return;
-  }
-  lcNavigate(proxyFrame, url, msg => { if (status) status.textContent = "GUST: " + msg; })
-    .then(() => { if (status) status.textContent = "GUST: loaded"; })
-    .catch(err => {
-      if (status) status.textContent = "GUST failed: " + ((err && err.message) || err) + " — try again or another site";
-      console.error("[browserNavigate]", err);
-    });
+  if (urlBar) urlBar.value = url || "";
+  if (status) status.textContent = "loading…";
+  // embedded proxy
+  openProxyBrowser(url);
+  if (status) status.textContent = "ready";
 }
 (document.getElementById("goBtn")||{addEventListener:()=>{}}).addEventListener("click", () => { const u = resolveUrl(urlBar.value); if (u) browserNavigate(u); });
 (urlBar||{addEventListener:()=>{}}).addEventListener("keydown", e => { if (e.key === "Enter") { const u = resolveUrl(urlBar.value); if (u) browserNavigate(u); } });
@@ -5181,8 +5323,74 @@ async function launchGame(url, title) {
     canDirect = canDirect || /(^|\.)(jsdelivr\.net|github\.io|githubusercontent\.com|pages\.dev|netlify\.app|vercel\.app|raw\.githack\.com|gitcdn\.link)$/i.test(h);
   } catch (_) {}
 
-  function loadDirect() {
+  async function fetchGameHtml(gameUrl) {
+    const res = await fetch(gameUrl, { mode: "cors", credentials: "omit", cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    let html = await res.text();
+    // If we got something that looks like plain text source without doctype wrapping issues, still treat as HTML
+    const base = gameUrl.replace(/[^/]+$/, "");
+    // Inject <base> so relative assets resolve against the real game origin
+    if (!/<base\s/i.test(html)) {
+      if (/<head[^>]*>/i.test(html)) {
+        html = html.replace(/<head[^>]*>/i, m => m + '\n<base href="' + base + '">');
+      } else if (/<html[^>]*>/i.test(html)) {
+        html = html.replace(/<html[^>]*>/i, m => m + '<head><base href="' + base + '"></head>');
+      } else {
+        html = '<!DOCTYPE html><head><base href="' + base + '"></head>' + html;
+      }
+    }
+    return html;
+  }
+
+  function loadHtmlIntoFrame(html) {
     return new Promise((resolve, reject) => {
+      let done = false;
+      const t = setTimeout(() => {
+        if (done) return;
+        done = true;
+        resolve(); // still show whatever rendered
+      }, 12000);
+      gameFrame.onload = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve();
+      };
+      try {
+        const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+        const blobUrl = URL.createObjectURL(blob);
+        gameFrame.removeAttribute("srcdoc");
+        gameFrame.src = blobUrl;
+        // revoke later
+        setTimeout(() => { try { URL.revokeObjectURL(blobUrl); } catch(_){} }, 60000);
+      } catch (e) {
+        // fallback srcdoc
+        try {
+          gameFrame.removeAttribute("src");
+          gameFrame.srcdoc = html;
+        } catch (e2) {
+          if (done) return;
+          done = true;
+          clearTimeout(t);
+          reject(e2);
+        }
+      }
+    });
+  }
+
+  async function loadDirect() {
+    document.getElementById("glHint").textContent = "fetching game…";
+    // Prefer fetch→blob so HTML always RENDERS (not shown as source code)
+    try {
+      const html = await fetchGameHtml(url);
+      document.getElementById("glHint").textContent = "loading game…";
+      await loadHtmlIntoFrame(html);
+      return;
+    } catch (fetchErr) {
+      console.warn("[Axiom Lite] fetch HTML failed, trying iframe src", fetchErr);
+    }
+    // Fallback: plain iframe src
+    await new Promise((resolve, reject) => {
       let done = false;
       const t = setTimeout(() => {
         if (done) return;
@@ -5202,28 +5410,15 @@ async function launchGame(url, title) {
         reject(new Error("direct load failed"));
       };
       document.getElementById("glHint").textContent = "loading game…";
+      gameFrame.removeAttribute("srcdoc");
       gameFrame.src = url;
     });
   }
 
-  async function loadViaGust() {
-    document.getElementById("glHint").textContent = "booting GUST proxy…";
-    let last = null;
-    const servers = (typeof WISP_SERVERS !== "undefined" && WISP_SERVERS.length) ? WISP_SERVERS : [WISP];
-    for (const server of servers) {
-      try {
-        document.getElementById("glHint").textContent = "GUST via " + server + "…";
-        if (typeof lcSwitchWisp === "function") await lcSwitchWisp(server);
-        await lcNavigate(gameFrame, url, msg => {
-          document.getElementById("glHint").textContent = "GUST: " + msg;
-        });
-        return;
-      } catch (e) {
-        last = e;
-        console.warn("[GUST] failed on", server, e);
-      }
-    }
-    throw last || new Error("all GUST servers failed");
+  async function loadViaProxy() {
+    // embedded proxy
+    document.getElementById("glHint").textContent = "loading…";
+    openProxyBrowser(url);
   }
 
   try {
@@ -5233,11 +5428,11 @@ async function launchGame(url, title) {
         setTimeout(hideLoader, 300);
         return;
       } catch (directErr) {
-        document.getElementById("glHint").textContent = "direct failed — switching to GUST…";
-        console.warn("[Axiom Lite] direct load failed, using GUST", directErr);
+        document.getElementById("glHint").textContent = "direct failed — switching to proxy…";
+        console.warn("[Axiom Lite] direct load failed, using proxy", directErr);
       }
     }
-    await loadViaGust();
+    await loadViaProxy();
     setTimeout(hideLoader, 300);
   } catch (err) {
     document.getElementById("glHint").textContent = "failed: " + ((err && err.message) || err);
