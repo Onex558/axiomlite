@@ -1,4 +1,5 @@
 
+
 <html lang="en" data-theme="dark"><head>
 
 <!-- Google Analytics 4 -->
@@ -4702,42 +4703,57 @@ fetch("https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_KEY + "&page=
 
 
 
-const PROXY_ENGINE = "https://catclassgoat.s3.us-east-1.amazonaws.com/circle.svg";
-const PROXY_RELAYS = [
-  "wss://education123321.b-cdn.net/api/",
-  "wss://science-340154168.b-cdn.net/api/",
-  "wss://c47cl455w1n.b-cdn.net/api/",
-  "wss://classroom.linuxoz.net/api/",
-  "wss://classroom.qjdy.net/api/",
-  "wss://classroom.wiki.gd/api/",
-  "wss://classroom.couchit.net/api/",
-  "wss://task4z.com/api/",
-  "wss://ns514995.ip-167-114-208.net/api/",
+/* ===== Axiom Lite proxy: your zaka CloudFront engine + public/same WISP ===== */
+/*
+ * Engine from your site:
+ *   https://d1vajlb5xnngpm.cloudfront.net/logo-….svg
+ * Same ?w1=&go= style as study.html — works from any page that embeds it.
+ */
+const ZAKA_ENGINE =
+  "https://d1vajlb5xnngpm.cloudfront.net/logo-b2b3e4d75f89f6104a35c1c7a5972ddd1be2cf72.svg";
+const ZAKA_ENGINE_ULTREV =
+  "https://d1vajlb5xnngpm.cloudfront.net/about-our-business.html";
+const ZAKA_WISP =
+  "wss://d1vajlb5xnngpm.cloudfront.net/api/";
+
+const PROXY_RELAY_KEY = "axiom.lite.relay";
+const PROXY_ENGINE_KEY = "axiom.lite.engine";
+
+/* Fallbacks if CloudFront WISP is blocked */
+const PUBLIC_WISPS = [
+  ZAKA_WISP,
   "wss://wisp.mercurywork.shop/wisp/",
   "wss://wisp.mercurywork.shop/",
   "wss://anura.pro/wisp/",
-  "wss://wisp.spacegulls.com/",
-  "wss://nebulaproxy.io/wisp/",
-  "wss://wisp.reallygoodtester.com/wisp/",
-  "wss://wisp.terbium.app/wisp/"
+  "wss://education123321.b-cdn.net/api/",
+  "wss://nebulaproxy.io/wisp/"
 ];
-const PROXY_RELAY_KEY = "axiom.lite.relay";
+
 let proxyRelay = null;
 try { proxyRelay = localStorage.getItem(PROXY_RELAY_KEY); } catch (e) {}
-let proxyReady = false;
-let proxyPendingUrl = null;
-let proxyFrameEl = null;
-let proxyOnStatus = null;
-let proxyOnReady = null;
+if (!proxyRelay) proxyRelay = ZAKA_WISP;
 
-function proxyCmd(action, extra) {
-  if (!proxyFrameEl || !proxyFrameEl.contentWindow) return;
+let proxyEngine = null;
+try { proxyEngine = localStorage.getItem(PROXY_ENGINE_KEY); } catch (e) {}
+if (!proxyEngine) proxyEngine = ZAKA_ENGINE;
+
+function b64url(str) {
   try {
-    proxyFrameEl.contentWindow.postMessage(
-      Object.assign({ type: "e:command", action: action }, extra || {}),
-      "*"
-    );
-  } catch (e) {}
+    return btoa(unescape(encodeURIComponent(str)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  } catch (e) {
+    return btoa(String(str)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+}
+
+function zakaSrc(targetUrl, wisp) {
+  const eng = proxyEngine || ZAKA_ENGINE;
+  const w = wisp || proxyRelay || ZAKA_WISP;
+  let go = (targetUrl || "").trim() || "https://duckduckgo.com";
+  if (!/^https?:\/\//i.test(go)) go = "https://" + go;
+  return eng + "?w1=" + b64url(w) + "&go=" + b64url(go);
 }
 
 function saveProxyRelay(url) {
@@ -4745,122 +4761,26 @@ function saveProxyRelay(url) {
   try { localStorage.setItem(PROXY_RELAY_KEY, url); } catch (e) {}
 }
 
-function pickProxyRelay(thenNavigate) {
-  const list = proxyRelay
-    ? [proxyRelay].concat(PROXY_RELAYS.filter(function (r) { return r !== proxyRelay; }))
-    : PROXY_RELAYS.slice();
-  (function attempt(i) {
-    if (i >= list.length) {
-      const last = list[list.length - 1];
-      saveProxyRelay(last);
-      proxyCmd("setW1p", { w1p: last });
-      if (thenNavigate) thenNavigate();
-      return;
-    }
-    const url = list[i];
-    let settled = false;
-    function next() {
-      if (!settled) {
-        settled = true;
-        attempt(i + 1);
-      }
-    }
-    try {
-      const ws = new WebSocket(url);
-      const timer = setTimeout(function () {
-        if (!settled) {
-          settled = true;
-          try { ws.close(); } catch (e) {}
-          attempt(i + 1);
-        }
-      }, 2800);
-      ws.onopen = function () {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        try { ws.close(); } catch (e) {}
-        saveProxyRelay(url);
-        if (proxyOnStatus) proxyOnStatus("relay connected");
-        proxyCmd("setW1p", { w1p: url });
-        if (thenNavigate) thenNavigate();
-      };
-      ws.onerror = function () { clearTimeout(timer); next(); };
-      ws.onclose = function () { clearTimeout(timer); next(); };
-    } catch (e) {
-      next();
-    }
-  })(0);
-}
-
-function ensureProxyMessageHandler() {
-  if (window.__axiomProxyMsgBound) return;
-  window.__axiomProxyMsgBound = true;
-  window.addEventListener("message", function (e) {
-    if (!proxyFrameEl) return;
-    try {
-      if (e.source !== proxyFrameEl.contentWindow) return;
-    } catch (err) {
-      return;
-    }
-    const d = e.data;
-    if (!d || d.source !== "e") return;
-    const type = String(d.type || "").replace(/^e:/, "");
-    if (type === "ready") {
-      proxyReady = true;
-      if (proxyOnStatus) proxyOnStatus("proxy ready — connecting relay…");
-      pickProxyRelay(function () {
-        if (proxyPendingUrl) {
-          proxyCmd("navigate", { url: proxyPendingUrl });
-          if (proxyOnStatus) proxyOnStatus("loading " + proxyPendingUrl);
-        }
-        if (typeof proxyOnReady === "function") {
-          try { proxyOnReady(); } catch (err) {}
-        }
-      });
-    } else if (type === "urlchange") {
-      if (d.url && proxyOnStatus) proxyOnStatus("");
-      if (d.url) {
-        const ub = document.getElementById("urlBar");
-        if (ub) ub.value = d.url;
-        const titleEl = document.getElementById("gameTitle");
-        if (titleEl && (document.getElementById("gamePlayer") && document.getElementById("gamePlayer").classList.contains("open"))) {
-          try {
-            titleEl.textContent = new URL(d.url).hostname.replace(/^www\./, "") || d.url;
-          } catch (_) {
-            titleEl.textContent = d.url;
-          }
-        }
-      }
-    } else if (type === "titlechange") {
-      if (d.title) {
-        const titleEl = document.getElementById("gameTitle");
-        if (titleEl && (document.getElementById("gamePlayer") && document.getElementById("gamePlayer").classList.contains("open"))) {
-          titleEl.textContent = d.title;
-        }
-      }
-    } else if (type === "error") {
-      if (proxyOnStatus) proxyOnStatus("page failed — trying next relay…");
-      // rotate relay
-      const list = PROXY_RELAYS.slice();
-      const idx = Math.max(0, list.indexOf(proxyRelay));
-      const next = list[(idx + 1) % list.length];
-      saveProxyRelay(next);
-      proxyCmd("setW1p", { w1p: next });
-      if (proxyPendingUrl) proxyCmd("navigate", { url: proxyPendingUrl });
-    }
-  });
-}
-
 function mountProxyEngine(iframeEl, targetUrl, onStatus, onReady) {
-  proxyFrameEl = iframeEl;
-  proxyOnStatus = onStatus || null;
-  proxyOnReady = onReady || null;
-  proxyPendingUrl = targetUrl || null;
-  proxyReady = false;
-  ensureProxyMessageHandler();
+  if (onStatus) onStatus("loading zaka engine…");
   iframeEl.removeAttribute("srcdoc");
-  if (onStatus) onStatus("starting proxy engine…");
-  iframeEl.src = PROXY_ENGINE;
+  const src = zakaSrc(targetUrl, proxyRelay);
+  let done = false;
+  const finish = function () {
+    if (done) return;
+    done = true;
+    if (onStatus) onStatus("");
+    if (typeof onReady === "function") {
+      try { onReady(); } catch (e) {}
+    }
+  };
+  iframeEl.onload = finish;
+  iframeEl.onerror = function () {
+    if (onStatus) onStatus("engine error — try another WISP");
+    finish();
+  };
+  iframeEl.src = src;
+  setTimeout(finish, 6000);
 }
 
 function openProxyBrowser(targetUrl) {
@@ -4879,16 +4799,45 @@ function openProxyBrowser(targetUrl) {
     const hint = document.getElementById("glHint");
     const glTitle = document.getElementById("glTitle");
     if (glTitle) glTitle.textContent = "Axiom proxy";
-    if (hint) hint.textContent = "Loading axiom Proxy...";
+    if (hint) hint.textContent = "Loading via zaka engine…";
   }
   const status = function (msg) {
     const hint = document.getElementById("glHint");
     if (hint) hint.textContent = msg || "";
   };
   mountProxyEngine(frame, url, status, function () {
-    if (loader) setTimeout(function () { loader.classList.add("gone"); }, 600);
+    if (loader) setTimeout(function () { loader.classList.add("gone"); }, 200);
   });
 }
+
+window.axiomProxy = {
+  setWisp: function (url) {
+    if (url && String(url).indexOf("wss://") === 0) saveProxyRelay(String(url));
+  },
+  setEngine: function (url) {
+    proxyEngine = url || ZAKA_ENGINE;
+    try { localStorage.setItem(PROXY_ENGINE_KEY, proxyEngine); } catch (e) {}
+  },
+  useUltrev: function () {
+    window.axiomProxy.setEngine(ZAKA_ENGINE_ULTREV);
+  },
+  useDefaultEngine: function () {
+    window.axiomProxy.setEngine(ZAKA_ENGINE);
+  },
+  wisp: function () { return proxyRelay; },
+  engine: function () { return proxyEngine || ZAKA_ENGINE; },
+  wisps: PUBLIC_WISPS.slice()
+};
+
+(function preconnect() {
+  try {
+    const l = document.createElement("link");
+    l.rel = "preconnect";
+    l.href = "https://d1vajlb5xnngpm.cloudfront.net";
+    l.crossOrigin = "anonymous";
+    document.head.appendChild(l);
+  } catch (e) {}
+})();
 
 function getProxyBlobUrl() { return "about:blank"; }
 
