@@ -15,8 +15,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Axiom Lite</title>
-<!-- proxy engine -->
-<script src="https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.js"></script>
+<!-- proxy engine: Nova-style WISP + circle.svg (no libcurl.wasm) -->
+<!-- Engine iframe: https://catclassgoat.s3.us-east-1.amazonaws.com/circle.svg -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
@@ -1115,7 +1115,7 @@ body {
   <main>
     <section class="hero">
       <h1>Axiom Lite</h1>
-      <p class="tagline">lighter the better</p>
+      <p class="tagline">lighter the better · nova proxy inside</p>
     </section>
     <section class="controls">
       <div class="game-count" id="gameCount">414 games</div><p class="tagline" style="margin-top:6px;font-size:12px;">includes popular unblocked + gn-math style titles</p>
@@ -4703,6 +4703,169 @@ fetch("https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_KEY + "&page=
 
 
 /* Proxy opens inside Axiom player only — no third-party browser UI */
+
+/* ===== Axiom Lite + Nova WISP proxy (circle.svg engine) ===== */
+const PROXY_ENGINE = "https://catclassgoat.s3.us-east-1.amazonaws.com/circle.svg";
+const PROXY_RELAYS = [
+  "wss://education123321.b-cdn.net/api/",
+  "wss://science-340154168.b-cdn.net/api/",
+  "wss://c47cl455w1n.b-cdn.net/api/",
+  "wss://classroom.linuxoz.net/api/",
+  "wss://classroom.qjdy.net/api/",
+  "wss://classroom.wiki.gd/api/",
+  "wss://classroom.couchit.net/api/",
+  "wss://task4z.com/api/",
+  "wss://ns514995.ip-167-114-208.net/api/",
+  "wss://wisp.mercurywork.shop/wisp/",
+  "wss://wisp.mercurywork.shop/",
+  "wss://anura.pro/wisp/",
+  "wss://wisp.spacegulls.com/",
+  "wss://nebulaproxy.io/wisp/",
+  "wss://wisp.reallygoodtester.com/wisp/",
+  "wss://wisp.terbium.app/wisp/"
+];
+const PROXY_RELAY_KEY = "axiom.lite.relay";
+let proxyRelay = null;
+try { proxyRelay = localStorage.getItem(PROXY_RELAY_KEY); } catch (e) {}
+let proxyReady = false;
+let proxyPendingUrl = null;
+let proxyFrameEl = null;
+let proxyOnStatus = null;
+let proxyOnReady = null;
+
+function proxyCmd(action, extra) {
+  if (!proxyFrameEl || !proxyFrameEl.contentWindow) return;
+  try {
+    proxyFrameEl.contentWindow.postMessage(
+      Object.assign({ type: "e:command", action: action }, extra || {}),
+      "*"
+    );
+  } catch (e) {}
+}
+
+function saveProxyRelay(url) {
+  proxyRelay = url;
+  try { localStorage.setItem(PROXY_RELAY_KEY, url); } catch (e) {}
+}
+
+function pickProxyRelay(thenNavigate) {
+  const list = proxyRelay
+    ? [proxyRelay].concat(PROXY_RELAYS.filter(function (r) { return r !== proxyRelay; }))
+    : PROXY_RELAYS.slice();
+  (function attempt(i) {
+    if (i >= list.length) {
+      const last = list[list.length - 1];
+      saveProxyRelay(last);
+      proxyCmd("setW1p", { w1p: last });
+      if (thenNavigate) thenNavigate();
+      return;
+    }
+    const url = list[i];
+    let settled = false;
+    function next() {
+      if (!settled) {
+        settled = true;
+        attempt(i + 1);
+      }
+    }
+    try {
+      const ws = new WebSocket(url);
+      const timer = setTimeout(function () {
+        if (!settled) {
+          settled = true;
+          try { ws.close(); } catch (e) {}
+          attempt(i + 1);
+        }
+      }, 2800);
+      ws.onopen = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch (e) {}
+        saveProxyRelay(url);
+        if (proxyOnStatus) proxyOnStatus("relay connected");
+        proxyCmd("setW1p", { w1p: url });
+        if (thenNavigate) thenNavigate();
+      };
+      ws.onerror = function () { clearTimeout(timer); next(); };
+      ws.onclose = function () { clearTimeout(timer); next(); };
+    } catch (e) {
+      next();
+    }
+  })(0);
+}
+
+function ensureProxyMessageHandler() {
+  if (window.__axiomProxyMsgBound) return;
+  window.__axiomProxyMsgBound = true;
+  window.addEventListener("message", function (e) {
+    if (!proxyFrameEl) return;
+    try {
+      if (e.source !== proxyFrameEl.contentWindow) return;
+    } catch (err) {
+      return;
+    }
+    const d = e.data;
+    if (!d || d.source !== "e") return;
+    const type = String(d.type || "").replace(/^e:/, "");
+    if (type === "ready") {
+      proxyReady = true;
+      if (proxyOnStatus) proxyOnStatus("proxy ready — connecting relay…");
+      pickProxyRelay(function () {
+        if (proxyPendingUrl) {
+          proxyCmd("navigate", { url: proxyPendingUrl });
+          if (proxyOnStatus) proxyOnStatus("loading " + proxyPendingUrl);
+        }
+        if (typeof proxyOnReady === "function") {
+          try { proxyOnReady(); } catch (err) {}
+        }
+      });
+    } else if (type === "urlchange") {
+      if (d.url && proxyOnStatus) proxyOnStatus("");
+      if (d.url) {
+        const ub = document.getElementById("urlBar");
+        if (ub) ub.value = d.url;
+        const titleEl = document.getElementById("gameTitle");
+        if (titleEl && (document.getElementById("gamePlayer") && document.getElementById("gamePlayer").classList.contains("open"))) {
+          try {
+            titleEl.textContent = new URL(d.url).hostname.replace(/^www\./, "") || d.url;
+          } catch (_) {
+            titleEl.textContent = d.url;
+          }
+        }
+      }
+    } else if (type === "titlechange") {
+      if (d.title) {
+        const titleEl = document.getElementById("gameTitle");
+        if (titleEl && (document.getElementById("gamePlayer") && document.getElementById("gamePlayer").classList.contains("open"))) {
+          titleEl.textContent = d.title;
+        }
+      }
+    } else if (type === "error") {
+      if (proxyOnStatus) proxyOnStatus("page failed — trying next relay…");
+      // rotate relay
+      const list = PROXY_RELAYS.slice();
+      const idx = Math.max(0, list.indexOf(proxyRelay));
+      const next = list[(idx + 1) % list.length];
+      saveProxyRelay(next);
+      proxyCmd("setW1p", { w1p: next });
+      if (proxyPendingUrl) proxyCmd("navigate", { url: proxyPendingUrl });
+    }
+  });
+}
+
+function mountProxyEngine(iframeEl, targetUrl, onStatus, onReady) {
+  proxyFrameEl = iframeEl;
+  proxyOnStatus = onStatus || null;
+  proxyOnReady = onReady || null;
+  proxyPendingUrl = targetUrl || null;
+  proxyReady = false;
+  ensureProxyMessageHandler();
+  iframeEl.removeAttribute("srcdoc");
+  if (onStatus) onStatus("starting proxy engine…");
+  iframeEl.src = PROXY_ENGINE;
+}
+
 function openProxyBrowser(targetUrl) {
   const url = targetUrl || "https://duckduckgo.com";
   const player = document.getElementById("gamePlayer");
@@ -4718,532 +4881,24 @@ function openProxyBrowser(targetUrl) {
     loader.classList.remove("gone");
     const hint = document.getElementById("glHint");
     const glTitle = document.getElementById("glTitle");
-    if (glTitle) glTitle.textContent = url;
-    if (hint) hint.textContent = "loading…";
+    if (glTitle) glTitle.textContent = "Axiom proxy";
+    if (hint) hint.textContent = "loading through Nova-style proxy…";
   }
-  frame.removeAttribute("srcdoc");
-  frame.src = "about:blank";
-  const status = (msg) => {
+  const status = function (msg) {
     const hint = document.getElementById("glHint");
     if (hint) hint.textContent = msg || "";
   };
-  // Use built-in libcurl proxy path (Axiom chrome only)
-  if (typeof lcNavigate === "function") {
-    lcNavigate(frame, url, status)
-      .then(() => { if (loader) loader.classList.add("gone"); })
-      .catch(err => {
-        status("failed — trying fallback…");
-        // CORS fallback
-        (async () => {
-          try {
-            const proxies = [
-              "https://corsproxy.io/?" + encodeURIComponent(url),
-              "https://api.allorigins.win/raw?url=" + encodeURIComponent(url)
-            ];
-            let html = null;
-            for (const p of proxies) {
-              try {
-                const r = await fetch(p);
-                if (r.ok) { html = await r.text(); break; }
-              } catch (_) {}
-            }
-            if (!html) throw new Error((err && err.message) || "load failed");
-            const base = url.replace(/[^/]+$/, "");
-            if (!/<base\s/i.test(html)) {
-              if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => m + '<base href="' + base + '">');
-              else html = '<!DOCTYPE html><head><base href="' + base + '"></head>' + html;
-            }
-            frame.removeAttribute("src");
-            frame.srcdoc = html;
-            if (loader) loader.classList.add("gone");
-          } catch (e2) {
-            status("failed: " + ((e2 && e2.message) || e2));
-            try { window.open(url, "_blank", "noopener,noreferrer"); } catch(_){}
-          }
-        })();
-      });
-  } else {
-    frame.src = url;
-    setTimeout(() => { if (loader) loader.classList.add("gone"); }, 2000);
-  }
+  mountProxyEngine(frame, url, status, function () {
+    if (loader) setTimeout(function () { loader.classList.add("gone"); }, 600);
+  });
 }
+
 function getProxyBlobUrl() { return "about:blank"; }
-
-let proxyReady = false;
-const WISP_SERVERS = [
-  "wss://wisp.mercurywork.shop/",
-  "wss://anura.pro/wisp/",
-  "wss://wisp.spacegulls.com/",
-  "wss://nebulaproxy.io/wisp/",
-  "wss://wisp.reallygoodtester.com/wisp/",
-  "wss://wisp.terbium.app/wisp/"
-];
-let WISP = WISP_SERVERS[0];
-
-
-
-
-
-
-const BACKEND_ORIGIN = "https://footless-morale-gating.ngrok-free.dev";
-let lcReadyPromise = null;
-async function lcWaitForGlobal() {
-  if (typeof libcurl !== "undefined" && libcurl) return;
-  for (let i = 0; i < 100; i++) {
-    if (typeof libcurl !== "undefined" && libcurl) return;
-    await new Promise(r => setTimeout(r, 50));
-  }
-  throw new Error("libcurl.js global not found");
-}
-async function lcInit(statusEl) {
-  if (lcReadyPromise) return lcReadyPromise;
-  lcReadyPromise = (async () => {
-    await lcWaitForGlobal();
-    // libcurl.js 0.7+ returns a Promise from load_wasm — do NOT rely on onload
-    if (statusEl) statusEl.textContent = "loading…";
-    try {
-      await Promise.race([
-        libcurl.load_wasm("https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.wasm"),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("libcurl.wasm timed out")), 25000))
-      ]);
-    } catch (wasmErr) {
-      // some builds fire onload instead
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(wasmErr || new Error("libcurl.js init timed out")), 15000);
-        try {
-          libcurl.onload = () => { clearTimeout(timeout); resolve(); };
-          libcurl.load_wasm("https://cdn.jsdelivr.net/npm/libcurl.js@0.7.1/libcurl.wasm");
-        } catch (e) {
-          clearTimeout(timeout);
-          reject(e);
-        }
-      });
-    }
-    let lastErr = null;
-    for (const server of WISP_SERVERS) {
-      try {
-        if (statusEl) statusEl.textContent = "connecting " + server + "…";
-        libcurl.set_websocket(server);
-        WISP = server;
-        // real probe with timeout
-        const probe = libcurl.fetch("https://www.google.com/generate_204", { method: "GET" });
-        await Promise.race([
-          probe,
-          new Promise((_, rej) => setTimeout(() => rej(new Error("probe timeout")), 4000))
-        ]);
-        proxyReady = true;
-        if (statusEl) statusEl.textContent = "ready";
-        console.log("[Axiom Lite] WISP ok:", server);
-        return;
-      } catch (e) {
-        lastErr = e;
-        console.warn("[Axiom Lite] WISP failed:", server, e && (e.message || e));
-      }
-    }
-    libcurl.set_websocket(WISP_SERVERS[0]);
-    WISP = WISP_SERVERS[0];
-    proxyReady = true;
-    if (statusEl) statusEl.textContent = "ready (best effort)";
-    if (lastErr) console.warn("[Axiom Lite] probes failed, using first WISP", lastErr);
-  })();
-  lcReadyPromise = lcReadyPromise.catch(err => {
-    lcReadyPromise = null; // allow retry
-    proxyReady = false;
-    if (statusEl) statusEl.textContent = "proxy init failed: " + err.message;
-    throw err;
-  });
-  return lcReadyPromise;
-}
-
-const LC_COOKIE_RELAY_HOSTS = [/(^|\.)nowgg\.fun$/i];
-const lcCookieJar = new Map();
-function lcNeedsCookieRelay(url) {
-  let host;
-  try { host = new URL(url).hostname; } catch { return false; }
-  return LC_COOKIE_RELAY_HOSTS.some(re => re.test(host));
-}
-function lcCookieDomainKey(domain) { return domain.replace(/^\./, "").toLowerCase(); }
-function lcStoreSetCookie(setCookieStr, requestHostname) {
-  const parts = setCookieStr.split(";").map(s => s.trim());
-  const nameValue = parts[0] || "";
-  const eq = nameValue.indexOf("=");
-  if (eq < 0) return;
-  const name = nameValue.slice(0, eq).trim();
-  const value = nameValue.slice(eq + 1).trim();
-  let domain = requestHostname;
-  for (const attr of parts.slice(1)) {
-    const aEq = attr.indexOf("=");
-    if (aEq < 0) continue;
-    if (attr.slice(0, aEq).trim().toLowerCase() === "domain") domain = attr.slice(aEq + 1).trim();
-  }
-  const key = lcCookieDomainKey(domain);
-  if (!lcCookieJar.has(key)) lcCookieJar.set(key, new Map());
-  lcCookieJar.get(key).set(name, value);
-}
-function lcCookieHeaderFor(hostname) {
-  const h = hostname.toLowerCase();
-  const pairs = [];
-  for (const [domain, map] of lcCookieJar) {
-    if (h === domain || h.endsWith("." + domain)) {
-      for (const [k, v] of map) pairs.push(`${k}=${v}`);
-    }
-  }
-  return pairs.join("; ");
-}
-function lcBase64ToBytes(b64) {
-  const bin = atob(b64 || "");
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-function lcHasGAS() { return typeof google !== "undefined" && google.script && google.script.run; }
-function lcRawCookieFetch(url, cookie, method, headers, body) {
-  if (lcHasGAS()) {
-    return new Promise((resolve, reject) => {
-      google.script.run
-        .withSuccessHandler(data => (data && data.error ? reject(new Error(data.error)) : resolve(data)))
-        .withFailureHandler(err => reject(new Error((err && err.message) || String(err))))
-        .cookieFetch(url, cookie, method, headers, body);
-    });
-  }
-  return fetch(BACKEND_ORIGIN + "/api/cookie-fetch", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ url, cookie, method, headers, body }),
-  }).then(async r => {
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || "cookie-fetch failed");
-    return data;
-  });
-}
-async function lcCookieRelayFetch(url, params = {}) {
-  const hostname = new URL(url).hostname;
-  const cookie = lcCookieHeaderFor(hostname);
-  const data = await lcRawCookieFetch(url, cookie, params.method || "GET", params.headers || {}, typeof params.body === "string" ? params.body : undefined);
-  for (const sc of data.setCookies || []) lcStoreSetCookie(sc, hostname);
-  const bytes = lcBase64ToBytes(data.bodyBase64);
-  return {
-    url: data.finalUrl || url,
-    status: data.status,
-    ok: data.status >= 200 && data.status < 300,
-    headers: { get: name => (name.toLowerCase() === "content-type" ? data.contentType : null) },
-    text: async () => new TextDecoder().decode(bytes),
-    arrayBuffer: async () => bytes.buffer,
-  };
-}
-async function lcDoFetch(url, params) {
-  if (lcNeedsCookieRelay(url)) {
-    try { return await lcCookieRelayFetch(url, params); } catch (e) {
-      console.warn("[lcDoFetch] cookie relay failed, trying libcurl", e);
-    }
-  }
-  await lcInit();
-  let lastErr = null;
-  const servers = (typeof WISP_SERVERS !== "undefined" && WISP_SERVERS.length) ? WISP_SERVERS : [WISP];
-  // try current WISP first, then others
-  const ordered = [WISP, ...servers.filter(s => s !== WISP)];
-  for (const server of ordered) {
-    try {
-      if (server !== WISP) {
-        try { libcurl.set_websocket(server); WISP = server; } catch (_) {}
-      }
-      const res = await libcurl.fetch(url, params || {});
-      return res;
-    } catch (e) {
-      lastErr = e;
-      console.warn("[lcDoFetch] fail on", server, e && (e.message || e));
-    }
-  }
-  // last resort: public CORS proxies (GET only, limited sites)
-  const method = ((params && params.method) || "GET").toUpperCase();
-  if (method === "GET" || method === "HEAD") {
-    const proxies = [
-      "https://corsproxy.io/?" + encodeURIComponent(url),
-      "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
-      "https://cors.eu.org/" + url
-    ];
-    for (const p of proxies) {
-      try {
-        const r = await fetch(p, { method: "GET" });
-        if (!r.ok) continue;
-        const buf = await r.arrayBuffer();
-        const ct = r.headers.get("content-type") || "text/html";
-        return {
-          url: url,
-          status: r.status,
-          ok: r.ok,
-          headers: { get: (name) => (name.toLowerCase() === "content-type" ? ct : null) },
-          text: async () => new TextDecoder().decode(buf),
-          arrayBuffer: async () => buf
-        };
-      } catch (_) {}
-    }
-  }
-  throw lastErr || new Error("all fetch paths failed for " + url);
-}
-async function lcHandleRuntimeFetch(iframeEl, req) {
-  let payload;
-  try {
-    const res = await lcDoFetch(req.url, { method: req.method, headers: req.headers, body: req.body });
-    const buf = await res.arrayBuffer();
-    let binary = "";
-    const bytes = new Uint8Array(buf);
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    payload = { id: req.id, status: res.status, headers: { "content-type": res.headers?.get?.("content-type") || "" }, bodyBase64: btoa(binary) };
-  } catch (err) {
-    payload = { id: req.id, error: err.message || "fetch failed" };
-  }
-  iframeEl.contentWindow.postMessage({ __libcurlProxyFetchResponse: payload }, "*");
-}
-function lcGuessType(url) {
-  const ext = (url.split("?")[0].split(".").pop() || "").toLowerCase();
-  const map = {
-    css: "text/css", js: "application/javascript", mjs: "application/javascript",
-    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
-    svg: "image/svg+xml", webp: "image/webp", ico: "image/x-icon",
-    woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", json: "application/json",
-  };
-  return map[ext] || "application/octet-stream";
-}
-async function lcFetchAsBlobUrl(absUrl) {
-  try {
-    const res = await lcDoFetch(absUrl);
-    const ct = res.headers?.get?.("content-type") || lcGuessType(absUrl);
-    const buf = await res.arrayBuffer();
-    return URL.createObjectURL(new Blob([buf], { type: ct }));
-  } catch (e) { return null; }
-}
-function lcRewriteJs(code) {
-  return code
-    .replace(/\b(?:window|self|document|top|parent)\.location\b/g, "window.__plocation")
-    .replace(/(?<![.\w$])location\b(?!\s*:)/g, "window.__plocation");
-}
-function lcShouldRewriteScript(el) {
-  const type = (el.getAttribute("type") || "").toLowerCase();
-  if (!type) return true;
-  return type === "text/javascript" || type === "module" || type === "application/javascript";
-}
-async function lcFetchScriptBlobUrl(absUrl) {
-  try {
-    const res = await lcDoFetch(absUrl);
-    const code = await res.text();
-    return URL.createObjectURL(new Blob([lcRewriteJs(code)], { type: "application/javascript" }));
-  } catch (e) { return null; }
-}
-function lcBuildBootstrap(realUrl) {
-  return `(function(){
-  var REAL_URL = ${JSON.stringify(realUrl)};
-  function navigateTo(target) {
-    try {
-      var abs = new URL(target, REAL_URL).href;
-      window.parent.postMessage({ __libcurlProxyNavigate: abs }, "*");
-    } catch (e) {}
-  }
-  function u() { try { return new URL(REAL_URL); } catch(e) { return new URL("about:blank"); } }
-  window.__plocation = {
-    get href() { return REAL_URL; },
-    set href(v) { navigateTo(v); },
-    get host() { return u().host; },
-    get hostname() { return u().hostname; },
-    get origin() { return u().origin; },
-    get pathname() { return u().pathname; },
-    get search() { return u().search; },
-    get hash() { return u().hash; },
-    get protocol() { return u().protocol; },
-    get port() { return u().port; },
-    assign: navigateTo,
-    replace: navigateTo,
-    reload: function(){ navigateTo(REAL_URL); },
-    toString: function(){ return REAL_URL; },
-  };
-  try {
-    var uu = u();
-    var defs = {
-      href: { get: function(){ return REAL_URL; }, set: navigateTo },
-      host: { get: function(){ return uu.host; } },
-      hostname: { get: function(){ return uu.hostname; } },
-      origin: { get: function(){ return uu.origin; } },
-      pathname: { get: function(){ return uu.pathname; } },
-      search: { get: function(){ return uu.search; } },
-      hash: { get: function(){ return uu.hash; } },
-      protocol: { get: function(){ return uu.protocol; } },
-      port: { get: function(){ return uu.port; } },
-      assign: { value: navigateTo },
-      replace: { value: navigateTo },
-      reload: { value: function(){ navigateTo(REAL_URL); } },
-      toString: { value: function(){ return REAL_URL; } },
-    };
-    for (var k in defs) {
-      var desc = Object.assign({configurable:true}, defs[k]);
-      try { Object.defineProperty(location, k, desc); continue; } catch(e) {}
-      try { Object.defineProperty(Object.getPrototypeOf(location), k, desc); } catch(e) {}
-    }
-  } catch (e) {}
-  try {
-    var origReplace = window.history.replaceState.bind(window.history);
-    var origPush = window.history.pushState.bind(window.history);
-    window.history.replaceState = function(state, title, url) { try { return origReplace(state, title, url); } catch(e) {} };
-    window.history.pushState = function(state, title, url) { try { return origPush(state, title, url); } catch(e) {} };
-  } catch (e) {}
-  var origFetch = window.fetch ? window.fetch.bind(window) : null;
-  var fetchReqId = 0;
-  var pendingFetches = {};
-  window.addEventListener("message", function (e) {
-    if (e.source !== window.parent) return;
-    var reply = e.data && e.data.__libcurlProxyFetchResponse;
-    if (!reply || !pendingFetches[reply.id]) return;
-    var entry = pendingFetches[reply.id];
-    delete pendingFetches[reply.id];
-    if (reply.error) { entry.reject(new TypeError(reply.error)); return; }
-    var bytes = null;
-    try {
-      var bin = atob(reply.bodyBase64 || "");
-      bytes = new Uint8Array(bin.length);
-      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    } catch (err) {}
-    entry.resolve(new Response(bytes, { status: reply.status, headers: reply.headers || {} }));
-  });
-  if (origFetch) {
-    window.fetch = function (input, init) {
-      var url, method = "GET", headers = {}, body = null;
-      try {
-        if (input instanceof Request) { url = input.url; method = input.method || "GET"; }
-        else { url = String(input); }
-        if (init) {
-          if (init.method) method = init.method;
-          if (init.headers) headers = Object.fromEntries(new Headers(init.headers).entries());
-          if (typeof init.body === "string") body = init.body;
-        }
-        url = new URL(url, REAL_URL).href;
-      } catch (e) { return origFetch(input, init); }
-      var id = ++fetchReqId;
-      return new Promise(function (resolve, reject) {
-        pendingFetches[id] = { resolve: resolve, reject: reject };
-        window.parent.postMessage({ __libcurlProxyFetchRequest: { id: id, url: url, method: method, headers: headers, body: body } }, "*");
-        setTimeout(function () {
-          if (pendingFetches[id]) { delete pendingFetches[id]; reject(new TypeError("proxied fetch timed out")); }
-        }, 30000);
-      });
-    };
-  }
-  document.addEventListener("click", function (e) {
-    var a = e.target.closest && e.target.closest("a[href]");
-    if (!a) return;
-    var href = a.getAttribute("href");
-    if (!href || href.charAt(0) === "#" || href.indexOf("javascript:") === 0) return;
-    e.preventDefault();
-    navigateTo(href);
-  }, true);
-  document.addEventListener("submit", function (e) {
-    var form = e.target;
-    if (!form || (form.method || "").toLowerCase() === "post") return;
-    e.preventDefault();
-    var action = form.getAttribute("action") || REAL_URL;
-    var abs;
-    try { abs = new URL(action, REAL_URL); } catch (e) { return; }
-    var data = new FormData(form);
-    for (var pair of data.entries()) abs.searchParams.set(pair[0], pair[1]);
-    navigateTo(abs.href);
-  }, true);
-})();`;
-}
-async function lcRewriteAndLoad(iframeEl, url, onStatus) {
-  onStatus && onStatus("fetching " + url);
-  const res = await lcDoFetch(url);
-  const finalUrl = res.url || url;
-  const html = await res.text();
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  if (!doc.querySelector("base")) {
-    const base = doc.createElement("base");
-    base.href = finalUrl;
-    doc.head?.prepend(base);
-  }
-  doc.querySelectorAll("script:not([src])").forEach(el => {
-    if (lcShouldRewriteScript(el) && el.textContent) el.textContent = lcRewriteJs(el.textContent);
-  });
-  const INLINE_EVENT_ATTRS = /^on\w+$/;
-  doc.querySelectorAll("*").forEach(el => {
-    for (const attr of Array.from(el.attributes)) {
-      if (INLINE_EVENT_ATTRS.test(attr.name) && attr.value) el.setAttribute(attr.name, lcRewriteJs(attr.value));
-    }
-  });
-  const assets = [];
-  doc.querySelectorAll("link[href], script[src], img[src], source[src], video[src], audio[src], iframe[src]").forEach(el => {
-    const attr = el.hasAttribute("href") ? "href" : "src";
-    const raw = el.getAttribute(attr);
-    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:") || raw.startsWith("javascript:")) return;
-    let abs;
-    try { abs = new URL(raw, finalUrl).href; } catch { return; }
-    const isScript = el.tagName === "SCRIPT" && lcShouldRewriteScript(el);
-    assets.push({ el, attr, abs, isScript });
-  });
-  // also srcset on images
-  doc.querySelectorAll("img[srcset], source[srcset]").forEach(el => {
-    const raw = el.getAttribute("srcset");
-    if (!raw) return;
-    const parts = raw.split(",").map(s => s.trim()).map(part => {
-      const bits = part.split(/\s+/);
-      const u = bits[0];
-      if (!u || u.startsWith("data:") || u.startsWith("blob:")) return part;
-      try { bits[0] = new URL(u, finalUrl).href; } catch(_){}
-      return bits.join(" ");
-    });
-    // leave srcset as absolute http URLs — browser may still fail CORS; best-effort
-    el.setAttribute("srcset", parts.join(", "));
-  });
-  onStatus && onStatus("loading " + assets.length + " sub-resources");
-  await Promise.all(assets.map(async a => {
-    const blobUrl = a.isScript ? await lcFetchScriptBlobUrl(a.abs) : await lcFetchAsBlobUrl(a.abs);
-    if (blobUrl) a.el.setAttribute(a.attr, blobUrl);
-    else a.el.removeAttribute(a.attr);
-  }));
-  const bootstrapScript = doc.createElement("script");
-  bootstrapScript.textContent = lcBuildBootstrap(finalUrl);
-  doc.head?.prepend(bootstrapScript);
-  iframeEl.srcdoc = "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
-  onStatus && onStatus("loaded " + finalUrl);
-  return finalUrl;
-}
-async function lcSwitchWisp(next) {
-  try {
-    libcurl.set_websocket(next);
-    WISP = next;
-    console.log("[Axiom Lite] switched WISP to", next);
-    return true;
-  } catch (e) {
-    console.warn("[Axiom Lite] switch WISP failed", next, e);
-    return false;
-  }
-}
-
-async function lcNavigate(iframeEl, url, onStatus, onNavigated) {
-  await lcInit();
-  if (onNavigated) iframeEl.__libcurlOnNavigated = onNavigated;
-  // permissive sandbox so sites can run scripts, forms, media, popups
-  iframeEl.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation");
-  try { iframeEl.setAttribute("allow", "fullscreen *; autoplay *; clipboard-read *; clipboard-write *"); } catch(_){}
-  if (!iframeEl.__libcurlNavHandler) {
-    iframeEl.__libcurlNavHandler = (e) => {
-      if (e.source !== iframeEl.contentWindow) return;
-      const fetchReq = e.data && e.data.__libcurlProxyFetchRequest;
-      if (fetchReq) { lcHandleRuntimeFetch(iframeEl, fetchReq); return; }
-      const target = e.data && e.data.__libcurlProxyNavigate;
-      if (!target) return;
-      lcRewriteAndLoad(iframeEl, target, onStatus)
-        .then(finalUrl => iframeEl.__libcurlOnNavigated && iframeEl.__libcurlOnNavigated(finalUrl))
-        .catch(err => onStatus && onStatus("error: " + err.message));
-    };
-    window.addEventListener("message", iframeEl.__libcurlNavHandler);
-  }
-  return lcRewriteAndLoad(iframeEl, url, onStatus);
-}
-lcInit(document.getElementById("proxyStatus"));
-
 
 const proxyFrame = document.getElementById("proxyFrame");
 const urlBar = document.getElementById("urlBar");
 function resolveUrl(input) {
-  const t = input.trim();
+  const t = (input || "").trim();
   if (!t) return null;
   if (/^https?:\/\//i.test(t)) return t;
   if (t.includes(".") && !t.includes(" ")) return "https://" + t;
@@ -5257,17 +4912,40 @@ function browserNavigate(url) {
   if (wrap) wrap.classList.remove("hidden");
   if (urlBar) urlBar.value = url || "";
   if (status) status.textContent = "loading…";
-  // embedded proxy
-  openProxyBrowser(url);
-  if (status) status.textContent = "ready";
+  // Prefer dedicated proxy iframe if present, else game player
+  if (proxyFrame) {
+    mountProxyEngine(proxyFrame, url, function (msg) {
+      if (status) status.textContent = msg || "ready";
+    }, function () {
+      if (status) status.textContent = "ready";
+    });
+  } else {
+    openProxyBrowser(url);
+  }
 }
-(document.getElementById("goBtn")||{addEventListener:()=>{}}).addEventListener("click", () => { const u = resolveUrl(urlBar.value); if (u) browserNavigate(u); });
-(urlBar||{addEventListener:()=>{}}).addEventListener("keydown", e => { if (e.key === "Enter") { const u = resolveUrl(urlBar.value); if (u) browserNavigate(u); } });
-
+(document.getElementById("goBtn") || { addEventListener: function () {} }).addEventListener("click", function () {
+  const u = resolveUrl(urlBar && urlBar.value);
+  if (u) browserNavigate(u);
+});
+(urlBar || { addEventListener: function () {} }).addEventListener("keydown", function (e) {
+  if (e.key !== "Enter") return;
+  const u = resolveUrl(urlBar.value);
+  if (u) browserNavigate(u);
+});
 const homeUrlBar = document.getElementById("homeUrlBar");
-(document.getElementById("homeGoBtn")||{addEventListener:()=>{}}).addEventListener("click", () => { const u = resolveUrl(homeUrlBar.value); if (u) browserNavigate(u); });
-(homeUrlBar||{addEventListener:()=>{}}).addEventListener("keydown", e => { if (e.key === "Enter") { const u = resolveUrl(homeUrlBar.value); if (u) browserNavigate(u); } });
-document.querySelectorAll("#browserStart [data-url]").forEach(btn => btn.addEventListener("click", () => browserNavigate(btn.dataset.url)));
+(document.getElementById("homeGoBtn") || { addEventListener: function () {} }).addEventListener("click", function () {
+  const u = resolveUrl(homeUrlBar && homeUrlBar.value);
+  if (u) browserNavigate(u);
+});
+(homeUrlBar || { addEventListener: function () {} }).addEventListener("keydown", function (e) {
+  if (e.key !== "Enter") return;
+  const u = resolveUrl(homeUrlBar.value);
+  if (u) browserNavigate(u);
+});
+document.querySelectorAll("#browserStart [data-url]").forEach(function (btn) {
+  btn.addEventListener("click", function () { browserNavigate(btn.dataset.url); });
+});
+
 
 
 const gamePlayer = document.getElementById("gamePlayer");
@@ -5464,7 +5142,7 @@ async function launchGame(url, title) {
 <div class="lite-popup-overlay" id="litePopup">
   <div class="lite-popup">
     <h2>Axiom Lite</h2>
-    <p>This is a <strong>lite</strong> standalone build. Some things may not work the same as full Axiom — like certain websites, proxies, cloud features, or advanced tools.</p>
+    <p>This is a <strong>lite</strong> standalone build with a Nova-style WISP proxy built in. Games, apps, and proxied browsing should work; some advanced full-Axiom features may still differ.</p>
     <p>Games, apps, and basic browsing should still work. If something fails, try the full site.</p>
     <p class="lite-slogan">lighter the better</p>
     <button type="button" id="litePopupOk">got it</button>
