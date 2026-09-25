@@ -798,11 +798,56 @@ html.player-open, body.player-open { overflow: hidden; }
 .view.active { display: block; }
 .site-nav a { cursor: pointer; }
 
+/* When an app/game is open: hide tabs + floating chrome underneath */
+html.player-open .bottom-nav,
+body.player-open .bottom-nav,
+html.player-open #bottomNav,
+body.player-open #bottomNav {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+html.player-open #onlineFloat,
+body.player-open #onlineFloat,
+html.player-open #stickyNav,
+body.player-open #stickyNav,
+html.player-open .scroll-top,
+body.player-open .scroll-top,
+html.player-open .topbar,
+body.player-open .topbar,
+html.player-open .site-nav,
+body.player-open .site-nav {
+  display: none !important;
+  pointer-events: none !important;
+}
+html.player-open .view,
+body.player-open .view {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 #gamePlayer {
-  position: fixed; inset: 0; z-index: 200; display: none;
+  position: fixed; inset: 0; z-index: 10050; display: none;
   flex-direction: column; background: var(--bg);
 }
 #gamePlayer.open { display: flex; }
+.player-progress {
+  height: 3px; width: 100%; background: transparent; flex-shrink: 0;
+  position: relative; overflow: hidden;
+}
+.player-progress.active::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent-bright), transparent);
+  animation: playerProg 1.1s ease-in-out infinite;
+}
+@keyframes playerProg {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+#gamePlayer.player-fs .cover-navbar,
+#gamePlayer.player-fs .player-progress { display: none !important; }
+#gamePlayer.player-fs .cover-viewport { inset: 0; }
+
 .cover-navbar { display: flex; align-items: center; height: 60px; padding: 0 18px; background: var(--bg-elevated); border-bottom: 2px solid var(--border); }
 .cover-section { flex: 1; display: flex; align-items: center; gap: 8px; }
 .cover-section.center { justify-content: center; min-width: 0; }
@@ -1006,7 +1051,8 @@ body {
 .bottom-nav, .bottom-nav a, .game-card, .pill, button, a, input, .theme-toggle, .search-wrapper {
   pointer-events: auto !important;
 }
-.bottom-nav { z-index: 9990 !important; }
+.bottom-nav { z-index: 500; }
+html.player-open .bottom-nav, body.player-open .bottom-nav { z-index: 0 !important; display: none !important; }
 
 
 /* ===== Lite disclaimer popup ===== */
@@ -1265,6 +1311,10 @@ body {
           <button class="settings-btn" id="cloakSave">save</button>
           <button class="settings-btn ghost" id="cloakReset">reset</button>
         </div>
+        <div class="launch-row" style="margin-top:16px;">
+          <p>auto-cloak when you switch tabs — title/icon flip to your cloak so it looks like classwork</p>
+          <div class="switch on" id="cloakBlurSwitch"><div class="knob"></div></div>
+        </div>
       </div>
     </section>
 
@@ -1301,17 +1351,21 @@ body {
 </div>
 
 <div id="gamePlayer">
-  <nav class="cover-navbar">
+  <nav class="cover-navbar" id="playerBar">
     <div class="cover-section">
       <button class="cover-btn" id="playerBack" title="Back to Axiom Lite"><span class="material-symbols-rounded">arrow_back</span></button>
+      <button class="cover-btn" id="playerReload" title="Reload"><span class="material-symbols-rounded">refresh</span></button>
     </div>
     <div class="cover-section center"><span class="cover-title" id="gameTitle">loading…</span></div>
     <div class="cover-section right">
+      <button class="cover-btn" id="playerBlank" title="Open in about:blank"><span class="material-symbols-rounded">tab</span></button>
+      <button class="cover-btn" id="playerFull" title="Fullscreen"><span class="material-symbols-rounded">fullscreen</span></button>
       <button class="cover-btn" id="playerClose" title="Close"><span class="material-symbols-rounded">close</span></button>
     </div>
   </nav>
+  <div class="player-progress" id="playerProgress" aria-hidden="true"></div>
   <div style="position:relative; flex:1;">
-    <iframe id="gameFrame" class="cover-viewport" allowfullscreen=""></iframe>
+    <iframe id="gameFrame" class="cover-viewport" allowfullscreen="" allow="fullscreen; autoplay; gamepad; clipboard-write"></iframe>
     <div class="game-loader" id="gameLoader">
       <div class="spinner"></div>
       <div class="gl-title" id="glTitle">loading…</div>
@@ -4373,17 +4427,48 @@ if (_themeToggle) {
     if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
     link.href = href || "data:,";
   }
+  const REAL_TITLE = document.title || "Axiom Lite";
+  let realFaviconHref = (document.querySelector("link[rel*='icon']") || {}).href || "data:,";
+  const STEALTH_BLUR_KEY = "axiom_cloak_on_blur";
   window.AxiomCloak = {
-    apply() { const title = localStorage.getItem(CLOAK_KEYS.title); const favicon = localStorage.getItem(CLOAK_KEYS.favicon); if (title) document.title = title; if (favicon) setFavicon(favicon); },
+    apply() {
+      const title = localStorage.getItem(CLOAK_KEYS.title);
+      const favicon = localStorage.getItem(CLOAK_KEYS.favicon);
+      if (title) document.title = title;
+      if (favicon) setFavicon(favicon);
+    },
+    restore() {
+      document.title = REAL_TITLE;
+      setFavicon(realFaviconHref || "data:,");
+    },
     save(title, favicon) {
       if (title) localStorage.setItem(CLOAK_KEYS.title, title); else localStorage.removeItem(CLOAK_KEYS.title);
       if (favicon) localStorage.setItem(CLOAK_KEYS.favicon, favicon); else localStorage.removeItem(CLOAK_KEYS.favicon);
       this.apply();
     },
     read: () => ({ title: localStorage.getItem(CLOAK_KEYS.title) || "", favicon: localStorage.getItem(CLOAK_KEYS.favicon) || "" }),
-    clear() { localStorage.removeItem(CLOAK_KEYS.title); localStorage.removeItem(CLOAK_KEYS.favicon); document.title = "Axiom Lite"; setFavicon("data:,"); },
+    clear() {
+      localStorage.removeItem(CLOAK_KEYS.title);
+      localStorage.removeItem(CLOAK_KEYS.favicon);
+      document.title = REAL_TITLE;
+      setFavicon(realFaviconHref || "data:,");
+    },
+    blurEnabled() { return localStorage.getItem(STEALTH_BLUR_KEY) !== "0"; },
+    setBlur(on) {
+      if (on) localStorage.removeItem(STEALTH_BLUR_KEY);
+      else localStorage.setItem(STEALTH_BLUR_KEY, "0");
+    },
   };
   window.AxiomCloak.apply();
+  /* Auto-cloak when tab loses focus; restore on return if no saved cloak still applies */
+  document.addEventListener("visibilitychange", function () {
+    if (!window.AxiomCloak.blurEnabled()) return;
+    if (document.hidden) window.AxiomCloak.apply();
+  });
+  window.addEventListener("blur", function () {
+    if (!window.AxiomCloak.blurEnabled()) return;
+    window.AxiomCloak.apply();
+  });
 
   const RM_KEY = "axiom_reduce_motion", HC_KEY = "axiom_high_contrast";
   function a11yGet(k) { return localStorage.getItem(k) === "1"; }
@@ -4530,6 +4615,15 @@ if (_themeToggle) {
   });
   (document.getElementById("cloakSave")||{addEventListener:()=>{}}).addEventListener("click", () => window.AxiomCloak.save(titleInput.value.trim(), faviconInput.value.trim()));
   (document.getElementById("cloakReset")||{addEventListener:()=>{}}).addEventListener("click", () => { window.AxiomCloak.clear(); titleInput.value = ""; faviconInput.value = ""; });
+  const cloakBlurSwitch = document.getElementById("cloakBlurSwitch");
+  if (cloakBlurSwitch) {
+    function paintCloakBlur() { cloakBlurSwitch.classList.toggle("on", window.AxiomCloak.blurEnabled()); }
+    paintCloakBlur();
+    cloakBlurSwitch.addEventListener("click", () => {
+      window.AxiomCloak.setBlur(!window.AxiomCloak.blurEnabled());
+      paintCloakBlur();
+    });
+  }
 
   const rmSwitch = document.getElementById("reduceMotionSwitch");
   const hcSwitch = document.getElementById("highContrastSwitch");
@@ -4905,23 +4999,114 @@ function hideLoader() {
   loaderHidden = true;
   gameLoader.classList.add("gone");
   clearTimeout(loaderTimer); clearTimeout(dismissTimer);
+  if (typeof setPlayerProgress === "function") setPlayerProgress(false);
 }
 glDismiss.addEventListener("click", hideLoader);
 
+let currentPlayerUrl = "";
+let currentPlayerTitle = "";
+const playerProgress = document.getElementById("playerProgress");
+
+function setPlayerProgress(on) {
+  if (!playerProgress) return;
+  playerProgress.classList.toggle("active", !!on);
+  playerProgress.setAttribute("aria-hidden", on ? "false" : "true");
+}
+
 function closePlayer() {
   gamePlayer.classList.remove("open");
+  gamePlayer.classList.remove("player-fs");
   document.body.classList.remove("player-open");
   document.documentElement.classList.remove("player-open");
   gameFrame.removeAttribute("srcdoc");
   gameFrame.src = "about:blank";
+  setPlayerProgress(false);
+  currentPlayerUrl = "";
+  currentPlayerTitle = "";
 }
 document.getElementById("playerBack").addEventListener("click", closePlayer);
 document.getElementById("playerClose").addEventListener("click", closePlayer);
+
+function openInAboutBlank(targetUrl, pageTitle) {
+  const url = targetUrl || currentPlayerUrl;
+  if (!url) return false;
+  let win;
+  try { win = window.open("about:blank", "_blank"); } catch (e) { win = null; }
+  if (!win) {
+    alert("Pop-up blocked — allow pop-ups for this site to use about:blank.");
+    return false;
+  }
+  let embedSrc = url;
+  /* If proxy helpers exist, prefer zaka engine URL for blocked hosts */
+  try {
+    if (typeof zakaSrc === "function") {
+      const host = new URL(url, location.href).hostname;
+      const directOk = /(^|\.)(jsdelivr\.net|github\.io|githubusercontent\.com|pages\.dev|netlify\.app|vercel\.app)$/i.test(host);
+      if (!directOk) embedSrc = zakaSrc(url);
+    }
+  } catch (e) {}
+  const safeTitle = String(pageTitle || currentPlayerTitle || "Classes").replace(/</g, "");
+  const doc = win.document;
+  doc.open();
+  doc.write("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>" + safeTitle + "</title>");
+  doc.write("<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%;position:fixed;inset:0}</style>");
+  doc.write("</head><body><iframe src=\"" + String(embedSrc).replace(/"/g, "&quot;") + "\" allow=\"fullscreen; autoplay; gamepad\" allowfullscreen></iframe></body></html>");
+  doc.close();
+  return true;
+}
+
+(function wirePlayerExtras() {
+  const blankBtn = document.getElementById("playerBlank");
+  const fullBtn = document.getElementById("playerFull");
+  const reloadBtn = document.getElementById("playerReload");
+  if (blankBtn) blankBtn.addEventListener("click", function () {
+    if (!openInAboutBlank(currentPlayerUrl, currentPlayerTitle)) return;
+    /* optional: close in-app player after spawning blank */
+  });
+  if (fullBtn) fullBtn.addEventListener("click", function () {
+    gamePlayer.classList.toggle("player-fs");
+    const on = gamePlayer.classList.contains("player-fs");
+    fullBtn.title = on ? "Exit fullscreen chrome" : "Fullscreen";
+    const icon = fullBtn.querySelector(".material-symbols-rounded");
+    if (icon) icon.textContent = on ? "fullscreen_exit" : "fullscreen";
+    try {
+      if (on && gameFrame.requestFullscreen) gameFrame.requestFullscreen();
+      else if (!on && document.fullscreenElement) document.exitFullscreen();
+    } catch (e) {}
+  });
+  if (reloadBtn) reloadBtn.addEventListener("click", function () {
+    if (!currentPlayerUrl) return;
+    launchGame(currentPlayerUrl, currentPlayerTitle || "game");
+  });
+  document.addEventListener("keydown", function (e) {
+    if (!gamePlayer.classList.contains("open")) return;
+    if (e.key === "Escape") {
+      if (gamePlayer.classList.contains("player-fs")) {
+        gamePlayer.classList.remove("player-fs");
+        e.preventDefault();
+      }
+    }
+  });
+})();
+
+function launchModeIsBlank() {
+  try { return (localStorage.getItem("axiom_launch_mode") || "same-tab") === "about-blank"; } catch (e) { return false; }
+}
 
 async function launchGame(url, title) {
   if (!url) return;
   url = String(url).trim();
   title = title || "game";
+  currentPlayerUrl = url;
+  currentPlayerTitle = title;
+
+  /* Settings → open in about:blank */
+  if (launchModeIsBlank()) {
+    if (openInAboutBlank(url, title)) return;
+    /* fall through to in-app player if popup blocked */
+  }
+
+  if (window.AxiomCloak) window.AxiomCloak.apply();
 
   gamePlayer.classList.add("open");
   document.body.classList.add("player-open");
@@ -4932,6 +5117,7 @@ async function launchGame(url, title) {
   loaderHidden = false;
   gameLoader.classList.remove("gone");
   glDismiss.hidden = true;
+  setPlayerProgress(true);
   clearTimeout(loaderTimer); clearTimeout(dismissTimer);
   loaderTimer = setTimeout(hideLoader, 45000);
   dismissTimer = setTimeout(() => { if (!loaderHidden) glDismiss.hidden = false; }, 8000);
