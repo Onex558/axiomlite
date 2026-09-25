@@ -15,8 +15,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Axiom Lite</title>
-<!-- proxy engine: Nova-style WISP + circle.svg (no libcurl.wasm) -->
-<!-- Engine iframe: https://catclassgoat.s3.us-east-1.amazonaws.com/circle.svg -->
+
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
@@ -1115,10 +1114,10 @@ body {
   <main>
     <section class="hero">
       <h1>Axiom Lite</h1>
-      <p class="tagline">lighter the better · nova proxy inside</p>
+      <p class="tagline">lighter the better</p>
     </section>
     <section class="controls">
-      <div class="game-count" id="gameCount">414 games</div><p class="tagline" style="margin-top:6px;font-size:12px;">includes popular unblocked + gn-math style titles</p>
+      <div class="game-count" id="gameCount">414 games</div><p class="tagline" style="margin-top:6px;font-size:12px;">includes popular unblocked </p>
     </section>
     <section class="games-grid" id="gamesGrid"></section>
   </main>
@@ -4702,9 +4701,7 @@ fetch("https://api.themoviedb.org/3/movie/popular?api_key=" + TMDB_KEY + "&page=
 
 
 
-/* Proxy opens inside Axiom player only — no third-party browser UI */
 
-/* ===== Axiom Lite + Nova WISP proxy (circle.svg engine) ===== */
 const PROXY_ENGINE = "https://catclassgoat.s3.us-east-1.amazonaws.com/circle.svg";
 const PROXY_RELAYS = [
   "wss://education123321.b-cdn.net/api/",
@@ -4882,7 +4879,7 @@ function openProxyBrowser(targetUrl) {
     const hint = document.getElementById("glHint");
     const glTitle = document.getElementById("glTitle");
     if (glTitle) glTitle.textContent = "Axiom proxy";
-    if (hint) hint.textContent = "loading through Nova-style proxy…";
+    if (hint) hint.textContent = "Loading axiom Proxy...";
   }
   const status = function (msg) {
     const hint = document.getElementById("glHint");
@@ -5127,7 +5124,6 @@ async function launchGame(url, title) {
 
 
 
-/* AI chat removed */
 </script>
 
 
@@ -5142,8 +5138,7 @@ async function launchGame(url, title) {
 <div class="lite-popup-overlay" id="litePopup">
   <div class="lite-popup">
     <h2>Axiom Lite</h2>
-    <p>This is a <strong>lite</strong> standalone build with a Nova-style WISP proxy built in. Games, apps, and proxied browsing should work; some advanced full-Axiom features may still differ.</p>
-    <p>Games, apps, and basic browsing should still work. If something fails, try the full site.</p>
+    <p>This is a <strong>lite</strong> Axiom proxy inside a single file so yeah.</p>
     <p class="lite-slogan">lighter the better</p>
     <button type="button" id="litePopupOk">got it</button>
   </div>
